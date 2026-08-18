@@ -1,0 +1,69 @@
+The reads in the COI mapped samples mapped to hundreds of references. I am hoping that there is one references that took a majority of those reads, so there is a clear winner here.
+
+```{r}
+# BOILER PLATE
+library(dplyr)
+```
+
+# REAL DATA -------------------------------------------
+
+The COI dataset is from Bold System, after running rmdup, and selecting specifically for COI sequences representing species only (no higher order taxa represented).
+
+```{r}
+# load data from collected columns file 
+data <- read.csv(file = "../../Data/pathoscope_coi_rmdup_COIonly_speciesOnly/CombinedTableAllSamples.txt", 
+                 header = TRUE,
+                 sep = "\t")
+
+# Set number of top values to plot
+top_x = as.integer(10)
+
+# initiate for loop
+for (i in colnames(data)){
+  
+  data_sample <- data.frame(data[,i], row.names = row.names(data)) %>% # Pull rows
+    sort_by(y = data[,i], decreasing = TRUE) # sort values from largest to smallest
+  
+  # select top_x values
+  data_sample <- data.frame(data_sample[1:top_x,], 
+                            row.names = row.names(data_sample)[1:top_x])
+  
+  # print pie chart
+  par(mar=c(5,15,5,15), cex = 0.75)
+  pie(data_sample$data_sample.1.top_x..., 
+      labels = row.names(data_sample), 
+      main = i) # change chart name
+
+}
+```
+
+The COIs in the reference used here is the same as above EXCEPT that we also used cdhit to remove redundancy (I also think it removed any reference with a "-" in it, which was a lot of them).
+
+```{r}
+# load data from collected columns file 
+data <- read.csv(file = "../../Data/pathoscope_rmdup_COIonly_speciesOnly_cdhit/CombinedTableAllSamples.txt", 
+                 header = TRUE,
+                 sep = "\t")
+
+# Set number of top values to plot
+top_x = as.integer(10)
+
+# initiate for loop
+for (i in colnames(data)){
+  
+  data_sample <- data.frame(data[,i], row.names = row.names(data)) %>% # Pull rows
+    sort_by(y = data[,i], decreasing = TRUE) # sort values from largest to smallest
+  
+  # select top_x values
+  data_sample <- data.frame(data_sample[1:top_x,], 
+                            row.names = row.names(data_sample)[1:top_x])
+  
+  # print pie chart
+  par(mar=c(5,15,5,15), cex = 0.75)
+  pie(data_sample$data_sample.1.top_x..., 
+      labels = row.names(data_sample), 
+      main = i) # change chart name
+
+}
+```
+
