@@ -19,53 +19,6 @@ library(readxl)
 library(hilldiv)
 library(vegan)
 ```
-
-## Get the abundance data
-
-```{r}
-# The data fresh out of the pathoscope alignment oven
-# data_start <- read.table('D://Users/Caitlin/Documents/Research/Crandall Lab/Transcriptomics/USDA_aphids/Data/CombinedTableAllSamples_Pathoscope_main.txt',
-#                          header = TRUE,
-#                          # row.names = "X",
-#                          sep = '\t')
-
-# data_small_thisOne <- read.table('D://Users/Caitlin/Documents/Research/Crandall Lab/Transcriptomics/USDA_aphids/Data/CombinedTableAllSamples_smallref_ThisOne.txt',
-#                          header = TRUE,
-#                          #row.names = "X",
-#                          sep = '\t')
-
-data_full <- read.delim("../../Data/CombinedTableAllSamples_full.tsv", 
-                        header = TRUE, 
-                        row.names = "X",
-                        sep = "\t") %>%
-  t() %>% 
-  as.data.frame() %>% 
-  rownames_to_column(var = "X") %>% 
-  mutate(X = sub("\\.sam\\.report$", "", X)) %>% # remove ".sam.report"
-  mutate(X = sub("_S\\d+", "", X)) %>% 
-  column_to_rownames(var = "X") %>% 
-  t() %>% 
-  as.data.frame() %>% 
-  rownames_to_column(var = "X") %>% 
-  as.data.frame() 
-  
-# # Now the relative abundance table of that
-# data_full_RelAbund <- data_full %>% 
-#   column_to_rownames(var = "X") %>% 
-#   tss(.) %>% 
-#   rownames_to_column(var = "X") %>% 
-#   as.data.frame(.)
-```
-
-## Grab the metadata table
-
-```{r}
-metadata <- read_excel(path = "../../Data/Owen_insect_tissues_WorkSheet.xlsx", 
-                       sheet = "GWU_RNAseq_2024") %>%
-  filter(!if_all(everything(), is.na)) %>% 
-  select(Number, Family, `Collection Date`) 
-```
-
 ## Get the mapper files
 
 And correct the mapper_suppressed file that got a little mixed up on the HPC.
@@ -105,15 +58,119 @@ mapper <- rbind(mapper_reliable, mapper_suppressed)
 #             quote = FALSE, row.names = TRUE, sep = "\t")
 ```
 
+
+## Get the abundance data
+
+```{r}
+# OG new data set ../../Data/Test new full alignment/CombinedTableAllSamples.txt
+data_full <- read.delim( "../../Data/CombinedTableAllSamples_full.tsv", # "../../Data_clean/CombinedTableAllSamples_8_14_26.txt", # "../../Data/CombinedTableAllSamples_full.tsv"
+                        header = TRUE, 
+                        row.names = "X",
+                        sep = "\t") %>%
+  t() %>% 
+  as.data.frame() %>% 
+  rownames_to_column(var = "X") %>% 
+  mutate(X = sub("\\.sam\\.report$", "", X)) %>% # remove ".sam.report"
+  mutate(X = sub("_S\\d+", "", X)) %>% 
+  column_to_rownames(var = "X") %>% 
+  t() %>% 
+  as.data.frame() %>% 
+  rownames_to_column(var = "X") %>% 
+  as.data.frame() 
+
+# OG code -- Translate the RefSeqIDs to species names
+sample_names <- colnames(data_full)
+
+data_taxid <- data_full %>% 
+  mutate(X = mapper[X, "TaxID"]) %>% 
+  group_by(X) %>% 
+  summarise(across(where(is.numeric), sum)) %>% 
+  ungroup() %>%
+  select(all_of(sample_names)) %>% 
+  as.data.frame()
+
+rm(sample_names)
+
+
+# Check that all the refSeqIDs in the data are also represented in the mapper
+setdiff(data_full$X, row.names(mapper))
+```
+
+
+## Filter abundance data (6 RPM) --- TAXIDS
+
+```{r}
+# Calculate the raw read count needed to get to 6 RPM for each sample
+raw_total <- data_taxid %>% 
+  select(-X) %>% 
+  colSums() 
+raw_thresh <- ceiling(raw_total * 0.000006) # Filter by 6 RPM
+# New data_frame
+holdMe <- as.data.frame(data_taxid$X)
+count = 2
+holdCol <- colnames(data_taxid)
+# Iterate over each sample and set reads below the sample threshold to 0
+for (i in raw_thresh) {
+  new_row <- data_taxid[[holdCol[count]]] %>% 
+    ifelse(. >= i, ., 0)
+  holdMe <- cbind(holdMe, new_row)
+  count = count + 1
+}
+colnames(holdMe) <- holdCol
+# Remove microbes which have no reads in any sample
+holdMe <-  holdMe %>%
+  filter(rowSums(across(-X)) > 0)
+# How many reads did I remove from each sample? 
+(data_taxid %>% select(-X) %>% 
+  summarise(across(everything(), ~ sum(., na.rm = TRUE)))) - (holdMe %>% 
+  select(-X) %>% 
+  summarise(across(everything(), ~ sum(., na.rm = TRUE))))
+
+data_taxid <- holdMe
+```
+# Identify pathogens
+
+```{r}
+# Load the pathogen reference list
+pathogen_reference <- read.delim(file = "../../Data/Pathogen_reference_list.tsv", 
+                                 header = TRUE, 
+                                 sep = "\t")
+
+# Isolate the taxID from the pathogen reference list
+path_ref_taxids <- pathogen_reference %>%
+  pull(taxid) %>% 
+  unique(.)
+
+# Pull all the rows from the data frame that match with matched_mapper_rows
+data_pathogens <- data_taxid %>% 
+  filter(X %in% path_ref_taxids)
+```
+
+
+
+# Other stuff ------------------------------------------------------------------
+## Grab the metadata table
+
+```{r}
+metadata <- read_excel(path = "../../Data/Owen_insect_tissues_WorkSheet.xlsx", 
+                       sheet = "GWU_RNAseq_2024") %>%
+  filter(!if_all(everything(), is.na)) %>% 
+  select(Number, Family, `Collection Date`) 
+```
+
 Check that all the refseq IDs in the abundance table (data_full) are represented in the mapper files. And if not, find the lineage information and manually add it to the mapper file.
 
 ```{r}
 setdiff(data_full$X, row.names(mapper)) 
-# Everything is represented in the mapper! Yay! 
+
+
+
+# setdiff(data_full$X, row.names(mapper)) %>% 
+#   write.table("../../Data/Test new full alignment/New_refseqIDs.tsv", sep = "\t", row.names = FALSE, quote = FALSE, col.names = FALSE)
+
 ```
 
 ```{r}
-# OG code
 sample_names <- colnames(data_full)
 
 data_species <- data_full %>% 
@@ -128,74 +185,11 @@ rm(sample_names)
 
 ```
 
-```{r}
-# # Run rarefaction
-# sample_names <- colnames(data_full)
-# 
-# data_species_rare <- data_full %>% 
-#   mutate(X = mapper[X, "TaxID"]) %>% 
-#   group_by(X) %>% 
-#   summarise(across(where(is.numeric), sum)) %>% 
-#   ungroup() %>%
-#   select(sample_names) %>% 
-#   select(-APHD00489) %>% # remove the adelgid
-#   mutate(across(where(is.numeric), ~as.integer(.x))) %>% # Make all counts integers
-#   column_to_rownames(var = "X") %>% 
-#   as.data.frame()
-# 
-# rm(sample_names)
-# 
-# # Find the minimum library size (the sample with the fewest reads)
-# raremax <- min(rowSums(data_species_rare))
-# # Rarify the data (this takes a minute)
-# set.seed(1025)
-# data_species_rare <- rrarefy(data_species_rare,raremax) %>% 
-#   as.data.frame()
-# 
-# # Pathogen richness
-# data_pathogens_rare <- data_species_rare %>% 
-#   filter(rownames(.) %in% pathogen_reference$taxid)
-# 
-# holdMe <- data_pathogens_rare
-#   # t() %>% 
-#   # as.data.frame() %>% 
-#   # mutate(
-#   #   across(where(is.numeric),
-#   #          ~ if_else(.x < 25, 0, .x)) # set values below "thresh" to 0 
-#   # ) %>% 
-#   # t() %>% 
-#   # as.data.frame()
-# 
-# # Separate out the fungi and bacteria
-# holdMe_bac <- holdMe %>%
-#   filter(rownames(.) %in% mapper$TaxID[mapper$Domain == "Bacteria"])
-# 
-# holdMe_fun <- holdMe %>%
-#   filter(rownames(.) %in% mapper$TaxID[mapper$Kingdom == "Fungi"])
-# 
-# # Same order  
-# identical(rownames(holdMe_bac), metadata$Number)
-# identical(rownames(holdMe_fun), metadata$Number)
-# 
-# # Make a richness column
-# # metadata$richness <- specnumber(holdMe)
-# # metadata$richness_bac <- specnumber(holdMe_bac)
-# # metadata$richness_fun <- specnumber(holdMe_fun)
-# # meta_graph <- metadata %>% 
-# #   filter(Family != "Adelgidae")
-# 
-#   # data_pathogens_rare <- data_species_rare %>% 
-#   # t() %>% 
-#   # as.data.frame() %>% 
-#   # filter(rownames(.) %in% pathogen_reference$taxid) %>%
-#   # filter(rownames(.) %in% mapper$TaxID[mapper$Domain == "Bacteria"])
 
-```
-
-## Filter abundance data (6 RPM)
+## Filter abundance data (6 RPM)--- FULL NAME
 
 ```{r}
-# Calculate the raw read count needed to get to 3 RPM for each sample
+# Calculate the raw read count needed to get to 6 RPM for each sample
 raw_total <- data_species %>% 
   select(-X) %>% 
   colSums() 
@@ -224,144 +218,44 @@ holdMe <-  holdMe %>%
 data_species <- holdMe
 ```
 
-```{r}
-# Get the pathogen list
-pathogen_reference <- read.delim(file = "../../Data/Pathogen_reference_list.tsv", 
-                                 header = TRUE, 
-                                 sep = "\t")
 
-# Move this later 
-# Check for pathogens
+
+# For alternative alignment
+
+```{r}
+holdMe <- mapper %>%
+  select(TaxID) %>% 
+  rownames_to_column(var = "X") %>%
+  as.data.frame()
+
+bindMe <- read.table("../refseq_taxids_new_8_17_26.txt", 
+                     sep = "\t")
+colnames(bindMe) <- c("X", "TaxID")
+
+RefSeq_taxID_mapper <- rbind(bindMe,holdMe) %>% 
+  column_to_rownames(var = "X")
+
+# Check that nothing else is missing
+setdiff(data_full$X, RefSeq_taxID_mapper$X)
+
+# Pathogens---------------------------------------------------------------------
+
 # Isolate the taxID from the pathogen reference list
 path_ref_taxids <- pathogen_reference %>%
   pull(taxid) %>% 
   unique(.)
 
 # Pull all the rows from mapper that match with the given pathogen reference taxIDs
-matched_mapper_rows <- mapper %>%
+matched_mapper_rows <- RefSeq_taxID_mapper %>%
   filter(TaxID %in% path_ref_taxids) %>%
-  pull(Full_name)
+  pull(X)
 
 # Pull all the rows from the data frame that match with matched_mapper_rows
-data_pathogens <- data_species %>% 
-  filter(X %in% matched_mapper_rows) %>% 
-  # mutate(across(where(is.numeric), ~ifelse((.x > 25), .x, 0))) %>% 
-  filter(rowSums(across(where(is.numeric))) > 0)
+data_pathogens <- data_full %>% 
+  filter(X %in% matched_mapper_rows)
+
+
 ```
 
-## % of detected raw read counts match to pathogens and non-pathogens
-
-```{r}
-# Pathogens
-Per_path <- (data_pathogens %>% select(-X) %>% 
-  summarise(across(everything(), ~ sum(., na.rm = TRUE)))) / (data_species %>% select(-X) %>% 
-  summarise(across(everything(), ~ sum(., na.rm = TRUE))))
-Per_path <- Per_path %>% 
-  t() %>% 
-  as.data.frame() %>% 
-  pull("V1")
-mean(Per_path)
-
-min(Per_path)
-max(Per_path)
-
-# Non-pathogens
-mean(1 - Per_path)
-```
-
-## Filter the abundance data (drop last 5% of taxa from each sample)
-
-```{r}
-# Make the final data frame
-data_clean <- data_species
-
-for (i in 2:ncol(data_clean)) {
-  # Get sample name
-  sample = colnames(data_clean)[i]
-  # grab the taxa to be discarded 
-  # Order the data frame by one of the samples (this does not change row #s)
-  taxa_cut <- data_clean %>% 
-    arrange(-desc(.data[[sample]])) %>% # arrange taxa smallest to largest read count by sample
-    filter(.data[[sample]] > 0)  %>% # Remove taxa where the sample has 0 reads
-    slice_head(prop = 0.05) %>% # grab the 5% of taxa with the lowest read count
-    pull(X) # Pull out the names of the taxa we are going to set to 0 reads for this sample
-  
-  # Set the cut taxa values to 0 for the given sample
-  data_clean[data_clean$X %in% taxa_cut, sample] <- 0
-}
-
-# Remove any rows where the total reads in that row is also 0
-data_clean <- data_clean %>%
-  filter(rowSums(across(-X)) > 0)
-
-# Check that the for loop didn't destroy the data
-holdMe <- data_species %>% 
-  select(-X) %>% 
-  summarise(across(everything(), ~ sum(., na.rm = TRUE))) %>% 
-  t() %>% 
-  as.data.frame() %>% 
-  pull(V1)
-
-data_species %>% 
-  select(-X) %>% 
-  summarise(across(everything(), ~ sum(., na.rm = TRUE)))
-
-data_clean %>% 
-  select(-X) %>% 
-  summarise(across(everything(), ~ sum(., na.rm = TRUE)))
-
-# Make clean the new table moving forward
-data_species <- data_clean
-rm(data_clean)
-```
-
-## Filter the abundance data (drop species whose relative abundance \< 0.005%)
-
-```{r}
-# Make the final data frame
-data_clean <- data_species
-
-# Get the total number of reads in each sample
-data_sum <- data_species %>% 
-  select(-X) %>% 
-  summarise(across(everything(), ~ sum(., na.rm = TRUE)))
-for (i in 2:ncol(data_clean)) {
-  # Get sample name
-  sample = colnames(data_clean)[i]
-  # Calculate the read count threshold required for meeting 0.005% relAbun
-  # Get the total number of reads
-  Tc <- data_sum[1,sample]
-  # Calculate the read count threshold needed to be at 0.005% relAbund
-  threshold <- (Tc*0.00005)
-  # Set counts that do not meet the threshold to 0
-  data_clean[[sample]] <- ifelse(data_clean[[sample]] < threshold,
-                                      0,
-                                      data_clean[[sample]])
-}
-# Remove any rows where the total reads in that row is also 0
-data_clean <- data_clean %>%
-  filter(rowSums(across(-X)) > 0)
 
 
-# Are any pathogens left?
-pathos <- data_clean %>% 
-  filter(X %in% pathogen_reference$taxid) %>% 
-  mutate(X = pathogen_reference$name[pathogen_reference$taxid == X])
-```
-
-### Histogram code if you need it
-
-```{r}
-# Just a visualization to see what the reads are that map to everything
-data_look <- data_species %>%
-  column_to_rownames("X") %>%
-  as.data.frame() %>% 
-  mutate(across(where(is.numeric), ~as.integer(.x)))
-  
-  # mutate(sum = rowSums(across(where(is.numeric)))
-
-hist(data_look$APHD00095[data_look$APHD00095 > 50 & data_look$APHD00095 < 2000])
-library(ggpubr)
-ggdensity(data_look$APHD00095[data_look$APHD00095 > 25 & data_look$APHD00095 < 1000])
-
-```
