@@ -144,6 +144,28 @@ path_ref_taxids <- pathogen_reference %>%
 # Pull all the rows from the data frame that match with matched_mapper_rows
 data_pathogens <- data_taxid %>% 
   filter(X %in% path_ref_taxids)
+
+# Convert pathogen taxIDs to actual names
+sample_names <- colnames(data_pathogens)
+
+lineage_mapper <- mapper %>% 
+  remove_rownames(.) %>% 
+  select(TaxID, Full_name) %>% 
+  unique(.) %>% 
+  remove_rownames(.) %>% 
+  as.data.frame() %>% 
+  column_to_rownames(var = "TaxID")
+
+data_pathogens_species <- data_pathogens %>% 
+  mutate(X = lineage_mapper[X, "Full name"]) %>% 
+  group_by(X) %>% 
+  summarise(across(where(is.numeric), sum)) %>% 
+  ungroup() %>%
+  select(all_of(sample_names)) %>% 
+  as.data.frame()
+
+rm(sample_names)
+
 ```
 
 

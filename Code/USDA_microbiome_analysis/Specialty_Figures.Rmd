@@ -1,0 +1,748 @@
+# Boiler Plate
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(reshape2)
+library(patchwork)
+```
+
+# Functions
+
+```{r}
+# Isolate the data and make the bar plot
+select_and_plot <- function(data, selection, legend_name, 
+                            plot_title, ncol_leg = NULL, width = 1, 
+                            y_lab = "", x_lab = "", swap = FALSE, x_label_tilt = 0) {
+  # Make the selection
+  data_graph <- data %>% 
+    filter(lineage %in% selection)
+  
+  # Make the box plot go horizontal
+  if (swap) {
+    # Swap the names of value and variable column so bar plot axis swap around
+    colnames(data_graph) <- c("lineage","value","variable")
+  }
+  
+  # Make the graph
+  # Create barplot of pathogens (Aphids)
+  the_plot <- ggplot(data_graph, aes(fill = lineage, 
+                                     y =  value, 
+                                     x = variable)) + 
+    geom_bar(position="stack", 
+             stat="identity", 
+             color = "black", 
+             width = width) + 
+    xlab(x_lab) + 
+    ylab(y_lab) + 
+    ggtitle(plot_title) + 
+    guides(fill=guide_legend(title=legend_name, ncol = ncol_leg)) +
+    theme(
+      title = element_text(size = 18),
+      axis.title = element_text(size = 16), 
+      axis.text = element_text(size = 15), 
+      legend.title = element_text(size = 15), 
+      legend.text = element_text(size = 15), 
+      axis.text.x = element_text(angle = x_label_tilt)
+    )
+  
+  return(the_plot)
+}
+
+# Just plot
+just_plot <- function(data, legend_name, 
+                            plot_title, ncol_leg = NULL) {
+  # Make the graph
+  # Create barplot of pathogens (Aphids)
+  the_plot <- ggplot(data, aes(fill = lineage, 
+                                     y =  value, 
+                                     x = variable)) + 
+    geom_bar(position="stack", 
+             stat="identity", 
+             color = "black") + 
+    xlab("Sample Name") + 
+    ylab("Read Count") + 
+    ggtitle(plot_title) + 
+    guides(fill=guide_legend(title=legend_name, ncol = ncol_leg)) +
+    theme(
+      title = element_text(size = 18),
+      axis.title = element_text(size = 16), 
+      axis.text = element_text(size = 14), 
+      legend.title = element_text(size = 15), 
+      legend.text = element_text(size = 13),
+      axis.text.x = element_text(angle = x_label_tilt)
+    )
+  
+  return(the_plot)
+}
+
+
+# Get with the threshold
+threshold_getter <- function(data, selection, threshold = 100) {
+  # Check threshold
+  data_thresh <- data %>% 
+    filter(lineage %in% selection) %>% 
+    mutate(value = ifelse(value < threshold, 0, value)) %>% 
+    filter(value > 0) %>% 
+    select(lineage, variable) %>%
+    as.data.frame() %>%
+    with(.,  .[order(lineage) , ]) 
+  
+  print(data_thresh, width = Inf)
+  
+}
+```
+
+# Get the metadata
+
+```{r}
+metadata <- read_excel(path = "../../Data/Owen_insect_tissues_WorkSheet.xlsx", 
+                       sheet = "GWU_RNAseq_2024") %>%
+  filter(!if_all(everything(), is.na)) %>% 
+  select(Number, Family, `Collection Date`) 
+```
+
+# Make alignment % plots
+
+```{r}
+sample_order <- c("APHD00489","APHD00085","APHD00095","APHD00098","APHD00110","APHD00328","APHD00334","APHD00340","APHD00350","APHD00352","APHD00356","APHD00361","APHD00437","APHD00445","APHD00454","APHD00455","APHD00457","APHD00471","APHD00476","APHD00479","APHD00482","APHD00501","APHD00508","APHD00519","APHD00562","APHD00566","APHD00568","APHD00570","APHD00574","APHD00576","APHD00578","APHD00579","APHD00612","APHD00447","APHD00469","APHD00472","APHD00480","APHD00503","APHD00509","APHD00521") 
+
+data_align <- read_excel(path = "../../Data/Owen_insect_tissues_WorkSheet.xlsx",
+                         sheet = "Sheet1") %>% 
+  select(Sample, Prop_aligned, unclassified) %>% 
+  mutate(
+    Prop_aligned = as.numeric(Prop_aligned),
+    unclassified = as.numeric(unclassified) 
+  ) %>% 
+  rename(Aligned = Prop_aligned, 
+         Unclassified = unclassified)
+
+# Get the alignment percentages
+min(data_align$Aligned)
+max(data_align$Aligned)
+mean(data_align$Aligned)
+
+# reshape the bar plot
+data_long <- data_align
+data_long <- melt(data_long, id.vars = "Sample") %>% 
+  mutate(variable = factor(variable, levels = c("Unclassified", "Aligned")),
+         Sample = factor(Sample, levels = c(sample_order)))
+```
+
+Make the plots
+
+```{r}
+ggplot(data_long, aes(fill = variable, 
+                      y =  value, 
+                      x = Sample)) + 
+  geom_bar(position="stack", 
+           stat="identity", 
+           color = "black") + 
+  theme(axis.text.x = element_text(angle = 90)) + 
+  xlab("Samples") + 
+  ylab("Proportion of sample") + 
+  guides(fill=guide_legend(title="Read fate")) + 
+  scale_fill_manual(values = c("gray", "salmon")) + 
+  labs(title = "Read Alignment %")
+
+ggsave(file = "../../Images/Percent_Align.svg")
+ggsave(file = "../../Images/Percent_Align.png")
+
+```
+
+# Separate ants and aphids
+
+```{r}
+# Set up the graphing data frame. 
+data_long <- data_pathogens_species
+data_long$lineage <- as.factor(data_long$X)
+data_long <- melt(data_long[,2:ncol(data_long)], id.vars = "lineage")
+data_graph <- data_long 
+rm(data_long)
+
+# What samples are ants and aphids
+aphids <- metadata %>% 
+  filter(Family == "Aphididae") %>% # Dropped Adelgid
+  pull(Number)
+ants <- metadata %>% 
+  filter(Family == "Formicidae" & Number != "APHD00521") %>% 
+  pull(Number)
+adelgid <- metadata %>% 
+  filter(Family == "Adelgidae") %>% # Dropped Adelgid
+  pull(Number)
+
+# Isolate aphids
+data_graph_aphids <- data_graph %>%
+  filter(variable %in% aphids) %>% 
+  filter(value > 0)
+
+# Isolate ants
+data_graph_ants <- data_graph %>%
+  filter(variable %in% ants) %>% 
+  filter(value > 0)
+
+# That one ant
+data_graph_521 <- data_graph %>% 
+  filter(variable == "APHD00521") %>% 
+  filter(value > 0)
+
+# The 1 Adelgid
+data_graph_adelgid <- data_graph %>% 
+  filter(variable == "APHD00489") %>% 
+  filter(value > 0)
+```
+
+# Make the 3 Domain level plots
+
+I am going to make 4 separate plots, 1 for each of Viruses, Bacteria, Fungus, and Plants (and Archaea).
+
+Sort the identified pathogen names into the different bins.
+
+```{r}
+# Set up bin variables
+Fungi <- c()
+Bacteria <- c()
+Viruses <- c()
+Plants <- c()
+Archaea <- c()
+what <- c()
+
+for (i in data_pathogens_species$X) {
+  # Convert Full_name to Domain name
+  domain = mapper$Domain[mapper[["Full_name"]] == i][1]
+  # Use the Domian name to sort into 4 bins
+  if (domain == "Eukaryota") {
+    # Move down to the kingdom level
+    kingdom = mapper$Kingdom[mapper[["Full_name"]] == i][1]
+    # Sort into Plant and Fungus
+    if (kingdom == "Fungi") {
+      Fungi <- c(Fungi, i)
+      next # move to the next iteration if the for loop
+    } # Else it is a plant OR ALGEA
+    Plants <- c(Plants, i)
+    next # Move to the next iteration of the for loop
+  }
+  if (domain == "Bacteria") {
+    Bacteria <- c(Bacteria, i)
+    next # move to the next iteration of the for loop
+  }
+  if (domain == "Viruses") {
+    Viruses <- c(Viruses, i)
+    next # move to the next iteration of the for loop
+  }
+  if (domain == "Archaea") {
+    Archaea <- c(Archaea, i)
+    next # Move to the next iteration of the for loop
+  } # Grab everything else (DEBUG CODE)
+  what <- c(what, i) # Is empty
+}
+
+```
+
+Sort the graphs (Bacteria, Viruses, and Fungi are the only pathogens), so there will be 3 graphs for each group
+
+Thin out the pathogens with a threshold value first
+
+```{r}
+thresh = 0
+```
+
+```{r}
+# Aphids
+data_thin_aphids <- data_graph_aphids %>% 
+  filter(value > thresh)
+# Viruses
+p1 <- select_and_plot(data = data_thin_aphids, selection = Viruses, 
+                plot_title = "", legend_name = "Viruses Detected", y_lab = "", swap = TRUE) + 
+  xlab("Read Count")
+p1
+#threshold_getter(data_thin_aphids, selection = Viruses)
+# Bacteria 
+p2 <- select_and_plot(data = data_thin_aphids, selection = Bacteria, 
+                legend_name = "Bacteria Detected", plot_title = "", 
+                ncol_leg = 1, swap = TRUE) + 
+  xlab("Read Count")
+p2
+#threshold_getter(data_thin_aphids, selection = Bacteria, threshold = 250)
+# Fungi
+p3 <- select_and_plot(data = data_thin_aphids, selection = Fungi, 
+                legend_name = "Fungi Detected", plot_title = "", 
+                ncol_leg = 1, swap = TRUE) + 
+  xlab("Read Count")
+p3
+#threshold_getter(data_thin_aphids, selection = Fungi, threshold = 2500)
+
+
+# Combined plot
+#p3/(p1|p2) 
+
+p3 + (p1/p2) + plot_annotation(tag_levels = "a",  
+                             title = "") & 
+  theme(plot.tag = element_text(size = 25, face = "bold"),
+        plot.tag.position = c(0.02, 1.02)) 
+
+# ggsave(filename = "../../Images/Aphid_pathogens.svg",
+#        height = 901.534,
+#        width = 1725.45,
+#        units = "px",
+#        dpi = "screen")
+# 
+# ggsave(filename = "../../Images/Aphid_pathogens.png",
+#        height = 700, # 700
+#        width = 1339.733, # 1339.733
+#        units = "px",
+#        dpi = "screen")
+# 
+# ggsave(filename = "../../Images/Aphid_pathogens.pdf",
+#        height = 901.534,
+#        width = 1725.45,
+#        units = "px",
+#        dpi = "screen")
+```
+
+ants
+
+```{r}
+# Isolate the data and make the bar plot
+select_and_plot <- function(data, selection, legend_name, 
+                            plot_title, ncol_leg = NULL, width = 1, 
+                            y_lab = "Read Count") {
+  # Make the selection
+  data_graph <- data %>% 
+    filter(lineage %in% selection)
+  
+  # Make the graph
+  # Create barplot of pathogens (Aphids)
+  the_plot <- ggplot(data_graph, aes(fill = lineage, 
+                                     y =  value, 
+                                     x = variable)) + 
+    geom_bar(position="stack", 
+             stat="identity", 
+             color = "black", 
+             width = width) + 
+    theme(axis.text.x = element_text(angle = 90)) + 
+    xlab("") + 
+    ylab(y_lab) + 
+    ggtitle(plot_title) + 
+    guides(fill=guide_legend(title=legend_name, ncol = ncol_leg)) +
+    theme(
+      title = element_text(size = 18),
+      axis.title = element_text(size = 16), 
+      axis.text = element_text(size = 15), 
+      legend.title = element_text(size = 15), 
+      legend.text = element_text(size = 15)
+    )
+  
+  return(the_plot)
+}
+```
+
+```{r}
+# Ants
+data_thin_ants <- data_graph_ants %>% 
+  filter(value > thresh) 
+
+# Viruses
+p1 <- select_and_plot(data = data_thin_ants, selection = Viruses, 
+                plot_title = "", legend_name = "Viruses Detected") + 
+  ylab("Read Count")
+p1
+#threshold_getter(data_thin_ants, selection = Viruses)
+# Bacteria 
+p2 <- select_and_plot(data = data_thin_ants, selection = Bacteria, 
+                legend_name = "Bacteria Detected", plot_title = "", 
+                ncol_leg = 1, x_label_tilt = 90) + 
+  ylab("Read Count")
+p2
+#threshold_getter(data_thin_ants, selection = Bacteria, threshold = 250)
+# Fungi
+p3 <- select_and_plot(data = data_thin_ants, selection = Fungi, 
+                legend_name = "Fungi Detected", plot_title = "", 
+                ncol_leg = 1, x_label_tilt = 90) + 
+  ylab("Read Count") 
+p3
+#threshold_getter(data_thin_ants, selection = Fungi, threshold = 2500)
+```
+
+The last ant
+
+```{r}
+library(scales)
+show_col(hue_pal()(7))
+```
+
+```{r}
+# That last ant 
+data_thin_521 <- data_graph_521 %>% 
+  filter(value > thresh) 
+
+# Viruses
+p4 <- select_and_plot(data = data_thin_521, selection = Viruses, 
+                plot_title = "", legend_name = "Viruses Detected") +
+  ylab("Read Count") + theme(axis.text.x = element_blank())
+p4
+#threshold_getter(data_thin_521, selection = Viruses)
+# Bacteria 
+p5 <- select_and_plot(data = data_thin_521, selection = Bacteria, 
+                legend_name = "Bacteria Detected", plot_title = "",
+                ncol_leg = 1, width = 0.25) +
+  ylab("Read Count") + theme(axis.text.x = element_blank())
+p5
+#threshold_getter(data_thin_521, selection = Bacteria, threshold = 250)
+
+# Bacteria, now without Pantoea agglomerans, so I can see the other read counts
+data_thin_521 <- data_graph_521 %>% 
+  filter(value > thresh) %>% 
+  filter(lineage != "Pantoea agglomerans")
+p6 <- select_and_plot(data = data_thin_521, selection = Bacteria, 
+                legend_name = "Bacteria Detected", plot_title = "",
+                ncol_leg = 1, width = 0.5) +
+  ylab("Read Count") + 
+  scale_fill_manual(values = c("#C49A00","#53B400","#00C094","#00B6EB","#A58AFF","#FB61D7"
+)) + theme(axis.text.x = element_blank())
+p6
+# Fungi
+p7 <- select_and_plot(data = data_thin_521, selection = Fungi, 
+                legend_name = "Fungi Detected", plot_title = "", 
+                ncol_leg = 1, width = 0.10) +
+  ylab("Read Count") + theme(axis.text.x = element_blank())
+p7
+#threshold_getter(data_thin_521, selection = Fungi, threshold = 2500)
+```
+
+Ant combined plot
+
+```{r}
+(p3 | p2)/ (p5 | p6 | p7) + plot_annotation(tag_levels = "a", 
+                             title = "") & 
+  theme(plot.tag = element_text(size = 25, face = "bold"),
+        plot.tag.position = c(0.02, 1.02)) 
+
+
+ggsave(filename = "../../Images/Ant_pathogens.svg",
+       height = 900,
+       width = 1339.733,
+       units = "px",
+       dpi = "screen")
+
+ggsave(filename = "../../Images/Ant_pathogens.png",
+       height = 900, # 700
+       width = 1339.733,
+       units = "px",
+       dpi = "screen")
+
+
+```
+
+Adelgid
+
+```{r}
+# Adelgid
+data_thin_adelgid <- data_graph_adelgid %>% 
+  filter(value > thresh)
+# Viruses
+select_and_plot(data = data_thin_adelgid, selection = Viruses, 
+                plot_title = "Adelgid sample", legend_name = "Viruses Detected")
+threshold_getter(data_thin_adelgid, selection = Viruses)
+
+# Bacteria 
+select_and_plot(data = data_thin_adelgid, selection = Bacteria, 
+                legend_name = "Bacteria Detected", plot_title = "Adelgid sample",
+                ncol_leg = 1)
+threshold_getter(data_thin_adelgid, selection = Bacteria, threshold = 250)
+# Fungi
+select_and_plot(data = data_thin_adelgid, selection = Fungi, 
+                legend_name = "Fungi Detected", plot_title = "Adelgid sample", 
+                ncol_leg = 1) + 
+  ylab("Read Count")
+threshold_getter(data_thin_adelgid, selection = Fungi, threshold = 2500)
+
+# Save the plot
+ggsave(filename = "../../Images/Adelgid_pathogens.svg",
+       height = 350,
+       width = 300,
+       units = "px",
+       dpi = "screen")
+
+ggsave(filename = "../../Images/Adelgid_pathogens.png",
+       height = 350, # 700
+       width = 300,
+       units = "px",
+       dpi = "screen")
+
+```
+
+.
+
+.
+
+.
+
+.
+
+.
+
+.
+
+.
+
+.
+
+.
+
+.
+
+# Now lets make the general ones for Plants
+
+### Function
+
+```{r}
+# 
+grab_and_group <- function(data, map, map_sup, level = "Species") {
+  # Set the X (nucleotide refID) of the new data frame to the pathogen name
+  for (i in 1:nrow(data)) {
+    # Isolate the RefSeqID
+    RefSeqID <- data[i,"X"] %>%
+      as.character(.)
+    
+    # Lets make a try catch for tha mapper files instead of an if statement
+    if (RefSeqID %in% rownames(map)) {
+      #Pull the full name from the mapper file
+      name <- map[[RefSeqID , level]]
+      #Replace the RefSeqID with the full name
+      data[i, "X"] = name
+      next
+    }else{
+      #Pull the full name from the mapper file
+      name <- map_sup[[RefSeqID , level]]
+      #Replace the RefSeqID with the full name
+      data[i, "X"] = name
+    }
+    
+  }
+  
+  # Now we need to combine rows where taxa are the same
+  data_new <- data %>% 
+    group_by(X) %>% 
+    summarise(across(where(is.numeric), sum)) %>% 
+    ungroup()
+  
+  return(data_new)
+}
+
+```
+
+Plants
+
+```{r}
+# Isolate rows that are all plants in abundance data
+# Idenfity which refIDs are Viridiplantae (which I already have a funciton for!)
+data_plants <- data_full %>%
+  infection_isolator(., level = "Kingdom", taxa = "Viridiplantae", 
+                     map = mapper, map_sup = mapper_suppressed) %>% 
+  grab_and_group(., mapper, map_sup = mapper_suppressed, level = "Genus") # Convert refIds to names, sum where they are the same
+
+# Set up the graphing data frame. 
+data_long <- data_plants
+data_long$lineage <- as.factor(data_long$X)
+data_long <- melt(data_long[,2:ncol(data_long)], id.vars = "lineage")
+data_graph_plants <- data_long %>% 
+  mutate(variable = sub("\\.sam\\.report$", "", variable)) %>% # remove ".sam.report"
+  mutate(variable = sub("_S\\d+", "", variable))
+rm(data_long)
+
+# Sort into Sample Taxa
+# Isolate aphids
+data_graph_plants_aphids <- data_graph_plants %>%
+  filter(variable %in% aphids) %>% 
+  filter(value > 0)
+
+# Isolate ants
+data_graph_plants_ants <- data_graph_plants %>%
+  filter(variable %in% ants) %>% 
+  filter(value > 0)
+
+# That one ant
+data_graph_plants_521 <- data_graph_plants %>% 
+  filter(variable == "APHD00521") %>% 
+  filter(value > 0)
+
+# Make the plots
+just_plot(data_graph_plants_aphids, legend_name = "Plant Genera", plot_title = "Aphid Samples", ncol_leg = 4)
+
+just_plot(data_graph_plants_ants, legend_name = "Plant Genera", plot_title = "Ant Samples", ncol_leg = 4)
+
+just_plot(data_graph_plants_521, legend_name = "Plant Genera", plot_title = "Ant sample 521", ncol_leg = 2)
+```
+
+Bacteria
+
+```{r}
+# Isolate rows that are all plants in abundance data
+# Idenfity which refIDs are Viridiplantae (which I already have a funciton for!)
+data_bacteria <- data_full %>%
+  infection_isolator(., level = "Domain", taxa = "Bacteria", 
+                     map = mapper, map_sup = mapper_suppressed) %>% 
+  grab_and_group(., mapper, map_sup = mapper_suppressed, level = "Phylum") # Convert refIds to names, sum where they are the same
+
+# Set up the graphing data frame. 
+data_long <- data_bacteria
+data_long$lineage <- as.factor(data_long$X)
+data_long <- melt(data_long[,2:ncol(data_long)], id.vars = "lineage")
+data_graph_bacteria <- data_long %>% 
+  mutate(variable = sub("\\.sam\\.report$", "", variable)) %>% # remove ".sam.report"
+  mutate(variable = sub("_S\\d+", "", variable))
+rm(data_long)
+
+# Sort into Sample Taxa
+# Isolate aphids
+data_graph_bacteria_aphids <- data_graph_bacteria %>%
+  filter(variable %in% aphids) %>% 
+  filter(value > 0)
+
+# Isolate ants
+data_graph_bacteria_ants <- data_graph_bacteria %>%
+  filter(variable %in% ants) %>% 
+  filter(value > 0)
+
+# That one ant
+data_graph_bacteria_521 <- data_graph_bacteria %>% 
+  filter(variable == "APHD00521") %>% 
+  filter(value > 0)
+
+# Make the plots
+just_plot(data_graph_bacteria_aphids, legend_name = "Bacterial Phyla", plot_title = "Aphid Samples", ncol_leg = 1)
+
+just_plot(data_graph_bacteria_ants, legend_name = "Bacterial Phyla", plot_title = "Ants Samples", ncol_leg = 1)
+
+just_plot(data_graph_bacteria_521, legend_name = "Bacterial Phyla", plot_title = "Ant Sample 521", ncol_leg = 1)
+```
+
+Viruses
+
+```{r}
+# Isolate rows that are all plants in abundance data
+# Idenfity which refIDs are Viridiplantae (which I already have a funciton for!)
+data_virus <- data_full %>%
+  infection_isolator(., level = "Domain", taxa = "Viruses", 
+                     map = mapper, map_sup = mapper_suppressed) %>% 
+  grab_and_group(., mapper, map_sup = mapper_suppressed, level = "Species") # Convert refIds to names, sum where they are the same
+
+# Set up the graphing data frame. 
+data_long <- data_virus
+data_long$lineage <- as.factor(data_long$X)
+data_long <- melt(data_long[,2:ncol(data_long)], id.vars = "lineage")
+data_graph_virus <- data_long %>% 
+  mutate(variable = sub("\\.sam\\.report$", "", variable)) %>% # remove ".sam.report"
+  mutate(variable = sub("_S\\d+", "", variable))
+rm(data_long)
+
+# Sort into Sample Taxa
+# Isolate aphids
+data_graph_virus_aphids <- data_graph_virus %>%
+  filter(variable %in% aphids) %>% 
+  filter(value > 0)
+
+# Isolate ants
+data_graph_virus_ants <- data_graph_virus %>%
+  filter(variable %in% ants) %>% 
+  filter(value > 0)
+
+# That one ant
+data_graph_virus_521 <- data_graph_virus %>% 
+  filter(variable == "APHD00521") %>% 
+  filter(value > 0)
+
+# Make the plots
+just_plot(data_graph_virus_aphids, legend_name = "Viruses", plot_title = "Aphid Samples", ncol_leg = 2)
+
+just_plot(data_graph_virus_ants, legend_name = "Viruses", plot_title = "Ants Samples", ncol_leg = 2)
+
+just_plot(data_graph_virus_521, legend_name = "Viruses", plot_title = "Ant Sample 521", ncol_leg = 1)
+```
+
+Fungi
+
+```{r}
+# Isolate rows that are all plants in abundance data
+# Idenfity which refIDs are Viridiplantae (which I already have a funciton for!)
+data_fungi <- data_full %>%
+  infection_isolator(., level = "Kingdom", taxa = "Fungi", 
+                     map = mapper, map_sup = mapper_suppressed) %>% 
+  grab_and_group(., mapper, map_sup = mapper_suppressed, level = "Phylum") # Convert refIds to names, sum where they are the same
+
+# Set up the graphing data frame. 
+data_long <- data_fungi
+data_long$lineage <- as.factor(data_long$X)
+data_long <- melt(data_long[,2:ncol(data_long)], id.vars = "lineage")
+data_graph_fungi <- data_long %>% 
+  mutate(variable = sub("\\.sam\\.report$", "", variable)) %>% # remove ".sam.report"
+  mutate(variable = sub("_S\\d+", "", variable))
+rm(data_long)
+
+# Sort into Sample Taxa
+# Isolate aphids
+data_graph_fungi_aphids <- data_graph_fungi %>%
+  filter(variable %in% aphids) %>% 
+  filter(value > 0)
+
+# Isolate ants
+data_graph_fungi_ants <- data_graph_fungi %>%
+  filter(variable %in% ants) %>% 
+  filter(value > 0)
+
+# That one ant
+data_graph_fungi_521 <- data_graph_fungi %>% 
+  filter(variable == "APHD00521") %>% 
+  filter(value > 0)
+
+# Make the plots
+just_plot(data_graph_fungi_aphids, legend_name = "Fungal Phyla", plot_title = "Aphid Samples", ncol_leg = 1)
+
+just_plot(data_graph_fungi_ants, legend_name = "Fungal Phyla", plot_title = "Ant Samples", ncol_leg = 1)
+
+just_plot(data_graph_fungi_521, legend_name = "Fungal Phyla", plot_title = "Ant Sample 521", ncol_leg = 1)
+```
+
+Archaea
+
+```{r}
+# Isolate rows that are all plants in abundance data
+# Idenfity which refIDs are Viridiplantae (which I already have a funciton for!)
+data_fungi <- data_full %>%
+  infection_isolator(., level = "Domain", taxa = "Archaea", 
+                     map = mapper, map_sup = mapper_suppressed) %>% 
+  grab_and_group(., mapper, map_sup = mapper_suppressed, level = "Phylum") # Convert refIds to names, sum where they are the same
+
+# Set up the graphing data frame. 
+data_long <- data_fungi
+data_long$lineage <- as.factor(data_long$X)
+data_long <- melt(data_long[,2:ncol(data_long)], id.vars = "lineage")
+data_graph_fungi <- data_long %>% 
+  mutate(variable = sub("\\.sam\\.report$", "", variable)) %>% # remove ".sam.report"
+  mutate(variable = sub("_S\\d+", "", variable))
+rm(data_long)
+
+# Sort into Sample Taxa
+# Isolate aphids
+data_graph_fungi_aphids <- data_graph_fungi %>%
+  filter(variable %in% aphids) %>% 
+  filter(value > 0)
+
+# Isolate ants
+data_graph_fungi_ants <- data_graph_fungi %>%
+  filter(variable %in% ants) %>% 
+  filter(value > 0)
+
+# That one ant
+data_graph_fungi_521 <- data_graph_fungi %>% 
+  filter(variable == "APHD00521") %>% 
+  filter(value > 0)
+
+# Make the plots
+just_plot(data_graph_fungi_aphids, legend_name = "Archaeal Phyla", plot_title = "Aphid Samples", ncol_leg = 1)
+
+just_plot(data_graph_fungi_ants, legend_name = "Archaeal Phyla", plot_title = "Ants Samples", ncol_leg = 1)
+
+just_plot(data_graph_fungi_521, legend_name = "Archaeal Phyla", plot_title = "Ant Sample 521", ncol_leg = 1)
+```
