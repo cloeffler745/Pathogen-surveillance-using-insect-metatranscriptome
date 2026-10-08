@@ -1,0 +1,418 @@
+# Boiler Plate
+
+```{r}
+library(Maaslin2)
+library(vroom)
+library(ggrepel)
+library(patchwork)
+library(dplyr)
+library(ggplot2)
+library(ggtext)
+```
+
+# Functions
+
+```{r}
+grab_and_group <- function(data, map, map_sup, level = "Species") {
+  # Set the X (nucleotide refID) of the new data frame to the pathogen name
+  for (i in 1:nrow(data)) {
+    # Isolate the RefSeqID
+    RefSeqID <- data[i,"X"] %>%
+      as.character(.)
+    
+    tryCatch(
+      {
+        # Lets make a try catch for tha mapper files instead of an if statement
+        if (RefSeqID %in% rownames(map)) {
+          #Pull the full name from the mapper file
+          name <- map[[RefSeqID , level]]
+          #Replace the RefSeqID with the full name
+          data[i, "X"] = name
+          next
+        }else{
+          #Pull the full name from the mapper file
+          name <- map_sup[[RefSeqID , level]]
+          #Replace the RefSeqID with the full name
+          data[i, "X"] = name
+        }
+      }, 
+      error=function(e) {
+        message("Error: boo!")
+        print(RefSeqID)
+        return(e)
+      }
+    )
+  }
+  
+  # Now we need to combine rows where taxa are the same
+  data_new <- data %>% 
+    group_by(X) %>% 
+    summarise(across(where(is.numeric), sum)) %>% 
+    ungroup()
+  
+  return(data_new)
+}
+
+# Volcano plot maker
+# Graph and save volcano plot
+
+volcano_plot <- function(maaslin_file, output_path, output_name, cutoff = 1*(10^-1), Plot_title = "Ant v. Aphid") {
+  
+  # Load the data
+  taxa <- vroom(maaslin_file, altrep = FALSE)
+  
+  taxa$symbol=taxa$feature # We want the feature names to be the labels.
+  
+  sigUp <- which(taxa$coef>0 & taxa$qval<cutoff) # right top quad
+  sigDown <- which(taxa$coef<0 & taxa$qval<cutoff) # left top quad
+  nonSigUp <- which(taxa$coef>0 & taxa$qval>cutoff) # right bottom quad
+  nonSigDown <- which(taxa$coef<0 & taxa$qval>cutoff) # left bottom quad
+  
+  taxa$Significance <- "FDR<0.1, Increased Abundance"
+  taxa[ sigUp, "Significance"] <- "FDR<0.1, Increased Abundance"
+  taxa[ sigDown, "Significance"] <- "FDR<0.1, Decreased Abundance"
+  taxa[ nonSigUp, "Significance"] <- "Less Significant, Increased Abundance"
+  taxa[ nonSigDown, "Significance"] <- "Less Significant, Decreased Abundance"
+  
+  
+  # Make the volcano plot ------------------------------------------------------
+  
+  #pdf(file=paste(output_path, paste(output_name, "pdf", sep = "."), sep = "/"), height = 24, width = 24) # Open the pdf
+  
+  ggplot(taxa, aes(x = coef, y = -log10(qval))) +
+    geom_point(aes(color = Significance), size = 1) +
+    scale_color_manual(values = c("FDR<0.1, Decreased Abundance" = "red", 
+                                  "FDR<0.1, Increased Abundance" = "green1", 
+                                  "Less Significant, Decreased Abundance" = "#d9b4b4", 
+                                  "Less Significant, Increased Abundance" = "#b8d9b4")) +
+    xlab("Effect size") +
+    ylab(expression('-Log'[10]*'P-Value')) +
+    ggtitle(Plot_title) +
+    theme(text = element_text(size = 12),
+          legend.position = "right", 
+          axis.title = element_text(size = 10),
+          plot.title = element_text(hjust = 0.5, size=10),
+          legend.text = element_text(size = 8),
+          legend.title = element_text(size = 10),
+          legend.key.height=unit(1, "cm")) +
+    geom_text_repel(
+      data = subset(taxa, qval < cutoff), # Select the dots that get labels
+      aes(label = symbol),
+      size = 2.5,
+      box.padding = unit(0.4, "lines"),
+      point.padding = unit(0.3, "lines"),
+      min.segment.length = 0
+    )
+  
+  #dev.off() # Close the pdf
+  # 
+  # # SVG
+  # ggsave(paste(output_path, 
+  #              paste(output_name, ".svg", sep = "."), 
+  #              sep = "/"), 
+  #        width = 14, 
+  #        height = 7)
+  # 
+  # # PNG
+  # ggsave(paste(output_path, 
+  #              paste(output_name, "png", sep = "."), 
+  #              sep = "/"), 
+  #        width = 14, 
+  #        height = 7)
+  
+  return(last_plot())
+  
+}
+```
+
+# Set up data frame and metadata
+
+```{r}
+# Data frame should already exist from the Process_aundance_table.Rmd
+# But now I need the actual species names
+data_full_species <- grab_and_group(data = data_full, 
+                                    map = mapper, map_sup = mapper_suppressed,
+                                    level = "Species") %>%
+    select(-"APHD00489_S22.sam.report") %>% # Drop the 1 Adelgidae sample 
+  filter(rowSums(across(-X)) > 0) %>% # Remove any features with 0 total count
+  column_to_rownames(var = "X") %>% 
+  t() %>% # Species as columns
+  as.data.frame() %>% 
+  rownames_to_column(var = "X") %>% # Now grab out the Sample names 
+  mutate(X = sub("\\.sam\\.report$", "", X)) %>% # Remove file names
+  mutate(X = sub("_S\\d+", "", X)) %>% # Remove Illumina sample IDs
+  column_to_rownames(var = "X") %>% 
+  as.data.frame()
+
+# Metadata
+metadata_Maas <- metadata %>% 
+  filter(Number != "APHD00489") %>% # Drop the 1 Adelgidae sample
+  column_to_rownames(var = "Number")
+```
+
+```{r}
+
+# Metadata
+metadata_Maas <- metadata %>% 
+  filter(Number != "APHD00489") %>% # Drop the 1 Adelgidae sample
+  column_to_rownames(var = "Number")
+
+# Convert from full names to Species names (I am not interested in mixing strains and species)
+# This is only 1 less than the original dataframe
+data_full_species <- data_species %>% 
+  mutate(X = mapper$Species[match(X, mapper$Full_name)]) %>% 
+  group_by(X) %>% 
+  summarise(across(where(is.numeric), sum)) %>% 
+  ungroup() %>%
+  select(X, all_of(rownames(metadata_Maas))) %>% 
+  as.data.frame() %>% 
+  column_to_rownames(var = "X") %>% 
+  t() %>% 
+  as.data.frame() 
+
+```
+
+# Run Maaslin2
+
+all (data_full_species)
+
+```{r}
+# Run differential abundance analysis
+Maaslin2(data_full_species,  
+         metadata_Maas, 
+         '../../Data/Maaslin_Final', # output location
+         min_abundance = 0,
+         min_prevalence = 0.1,
+         max_significance = 0.1, #qval threshold for significance
+         analysis_method = 'LM',
+         #random_effects = c("GROUP NUMBER"),
+         standardize = FALSE, #z-scores
+         transform = 'LOG',
+         normalization = 'TSS', 
+         cores = 7)
+
+# Make the Volcano plot
+volcano_plot(maaslin_file = '../../Data/Maaslin_Final/all_results.tsv', 
+             output_path = '../../Data/Maaslin_Final', 
+             output_name = "Volcano_plots_all", 
+             Plot_title = "Aphids v. Ants")
+```
+
+Bacteria
+
+```{r}
+# Select the data
+data_Mas_specific <- data_full_species %>% 
+  select(any_of(unique(mapper$Species[mapper$Domain == "Bacteria"])))
+
+# Differential abundance analysis
+Maaslin2(data_Mas_specific,  
+         metadata_Maas, 
+         '../../Data/Maaslin_Final/Bacteria', # output location
+         min_abundance = 0,
+         min_prevalence = 0.1,
+         max_significance = 0.1, #qval threshold for significance
+         analysis_method = 'LM',
+         fixed_effects = "Family",
+         #random_effects = c("GROUP NUMBER"),
+         standardize = FALSE, #z-scores
+         transform = 'LOG',
+         normalization = 'TSS', 
+         cores = 7)
+
+# Make the Volcano plot
+volcano_plot(maaslin_file = '../../Data/Maaslin_Final/Bacteria/all_results.tsv', 
+             output_path = '../../Data/Maaslin_Final/Bacteria', 
+             output_name = "Bacteria_only", 
+             Plot_title = "Aphids v. Ants (Bacterial Species)")
+```
+
+Viruses
+
+```{r}
+# Select the data
+data_Mas_specific <- data_full_species %>% 
+  select(any_of(unique(mapper$Species[mapper$Domain == "Viruses"])))
+
+# Differential abundance analysis
+Maaslin2(data_Mas_specific,  
+         metadata_Maas, 
+         '../../Data/Maaslin_Final/Viruses', # output location
+         min_abundance = 0,
+         min_prevalence = 0.1,
+         max_significance = 0.1, #qval threshold for significance
+         analysis_method = 'LM',
+         fixed_effects = "Family",
+         #random_effects = c("GROUP NUMBER"),
+         standardize = FALSE, #z-scores
+         transform = 'LOG',
+         normalization = 'TSS', 
+         cores = 1)
+
+# Make the Volcano plot
+volcano_plot(maaslin_file = '../../Data/Maaslin2_outs/Viruses/all_results.tsv', 
+             output_path = '../../Data/Maaslin2_outs/Viruses', 
+             output_name = "Viruses_only", 
+             Plot_title = "Aphids v. Ants (Viral Species)")
+```
+
+Fungi
+
+```{r}
+# Select the data
+data_Mas_specific <- data_full_species %>% 
+  select(any_of(unique(mapper$Species[mapper$Kingdom == "Fungi"])))
+
+# Differential abundance analysis
+Maaslin2(data_Mas_specific,  
+         metadata_Maas, 
+         '../../Data/Maaslin_Final/Fungi', # output location
+         min_abundance = 0,
+         min_prevalence = 0.1,
+         max_significance = 0.1, #qval threshold for significance
+         analysis_method = 'LM',
+         fixed_effects = "Family",
+         #random_effects = c("GROUP NUMBER"),
+         standardize = FALSE, #z-scores
+         transform = 'LOG',
+         normalization = 'TSS')
+
+
+# Make the Volcano plot
+volcano_plot(maaslin_file = '../../Data/Maaslin_Final/Fungi/all_results.tsv', 
+             output_path = '../../Data/Maaslin_Final/Fungi', 
+             output_name = "Fungi_only", 
+             Plot_title = "Aphids v. Ants (Fungal Species)")
+```
+
+Archaea
+
+```{r}
+# Select the data
+data_Mas_specific <- data_full_species %>% 
+  select(any_of(unique(mapper$Species[mapper$Domain == "Archaea"])))
+
+# Differential abundance analysis
+Maaslin2(data_Mas_specific,  
+         metadata_Maas, 
+         '../../Data/Maaslin_Final/Archaea', # output location
+         min_abundance = 0,
+         min_prevalence = 0.1,
+         max_significance = 0.1, #qval threshold for significance
+         analysis_method = 'LM',
+         fixed_effects = "Family",
+         #random_effects = c("GROUP NUMBER"),
+         standardize = FALSE, #z-scores
+         transform = 'LOG',
+         normalization = 'TSS', 
+         cores = 7)
+
+# Make the Volcano plot
+volcano_plot(maaslin_file = '../../Data/Maaslin_Final/Archaea/all_results.tsv', 
+             output_path = '../../Data/Maaslin_Final/Archaea', 
+             output_name = "Archaea_only", 
+             Plot_title = "Aphids v. Ants (Archaeal Species)")
+```
+
+Plants
+
+```{r}
+# Select the data
+data_Mas_specific <- data_full_species %>% 
+  select(any_of(unique(mapper$Species[mapper$Kingdom == "Viridiplantae"])))
+
+# Differential abundance analysis
+Maaslin2(data_Mas_specific,  
+         metadata_Maas, 
+         '../../Data/Maaslin_Final/Plants', # output location
+         min_abundance = 0,
+         min_prevalence = 0.1,
+         max_significance = 0.1, #qval threshold for significance
+         analysis_method = 'LM',
+         fixed_effects = "Family",
+         #random_effects = c("GROUP NUMBER"),
+         standardize = FALSE, #z-scores
+         transform = 'LOG',
+         normalization = 'TSS', 
+         cores = 7)
+
+# Make the Volcano plot
+volcano_plot(maaslin_file = '../../Data/Maaslin_Final/Plants/all_results.tsv', 
+             output_path = '../../Data/Maaslin_Final/Plants', 
+             output_name = "Plants_only", 
+             Plot_title = "Aphids v. Ants (Plant Species)")
+```
+
+# Make the combined figure
+
+```{r}
+# Make the Volcano plot
+plot_A <- volcano_plot(maaslin_file = '../../Data/Maaslin_Final/Bacteria/all_results.tsv', 
+                       output_path = '../../Data/Maaslin_Final/Bacteria', 
+                       output_name = "Bacteria_only", 
+                       Plot_title = "Aphids v. Ants (Bacterial Species)")
+
+plot_B <- volcano_plot(maaslin_file = '../../Data/Maaslin_Final/Fungi/all_results.tsv', 
+                       output_path = '../../Data/Maaslin_Final/Fungi', 
+                       output_name = "Fungi_only", 
+                       Plot_title = "Aphids v. Ants (Fungal Species)")
+
+(plot_A / plot_B) + plot_annotation(tag_levels = "a", 
+                             title = "") & 
+  theme(plot.tag = element_text(size = 15, face = "bold"),
+        plot.tag.position = c(0.02, 1.02), 
+        plot.title = element_markdown(),
+        legend.text = element_text(size = 8, margin = margin(b = 2)), 
+        legend.key.spacing = unit(0.1, "cm")) 
+
+ggsave(filename = "../../Images/Diff_Abund_Results.pdf",
+       width = 180,
+       height = 178,
+       units = "mm", 
+       dpi = 1200)
+```
+
+# Pathogen presence?
+
+Are any of the differentially abundant species pathogens?
+
+```{r}
+# # Get the pathogens in the Maaslin results
+# results <- read.delim(file = "../../Data/Maaslin2_outs/significant_results.tsv", 
+#                       sep = "\t", 
+#                       header= TRUE) %>% 
+#   pull(feature)
+
+# Pull pathogens that we found in the data
+pathogens <- data_pathogens %>% 
+  pull(X) %>% 
+  make.names()
+
+# # Are there any overlaps
+# intersect(results,pathogens) # Two fungi
+
+
+# Do these fungi still appear when we focus analysis on Fungi
+results <- read.delim(file = "../../Data/Maaslin_Final/Fungi/significant_results.tsv", 
+                      sep = "\t", 
+                      header= TRUE) %>% 
+  pull(feature)
+
+intersect(results,pathogens) # No
+
+# Bacteria
+results <- read.delim(file = "../../Data/Maaslin_Final/Bacteria/significant_results.tsv", 
+                      sep = "\t", 
+                      header= TRUE) %>% 
+  pull(feature)
+
+intersect(results,pathogens) # No
+
+# Viruses
+results <- read.delim(file = "../../Data/Maaslin_Final/Viruses/significant_results.tsv", 
+                      sep = "\t", 
+                      header= TRUE) %>% 
+  pull(feature)
+
+intersect(results,pathogens) # No
+```
